@@ -1,5 +1,3 @@
- 
-
 
 import FreeCAD
 import FreeCADGui

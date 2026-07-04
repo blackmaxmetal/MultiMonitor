@@ -14,6 +14,7 @@ def auto_start_multimonitor():
         if hasattr(FreeCADGui, '_mm_win_v26') and FreeCADGui._mm_win_v26:
             try:
                 FreeCADGui._mm_win_v26.close()
+                FreeCADGui._mm_win_v26 = None
             except:
                 pass
 
