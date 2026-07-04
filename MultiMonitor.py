@@ -129,7 +129,8 @@ class TabContextMenuFilter(QtCore.QObject):
         try:
             # Create a native top-level container window for the 4 viewpoints
             quad_frame = QtWidgets.QMainWindow(None, QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowMinMaxButtonsHint | QtCore.Qt.WindowCloseButtonHint)
-            quad_frame.setWindowTitle(f"Four View Matrix Clone - {target_sub_win.windowTitle()}")
+            # UPDATED: Adjusted title to represent the new LEFT orientation tracking sequence
+            quad_frame.setWindowTitle(f"Four View Matrix Clone (TOP, FRONT, LEFT, ISOMETRIC) - {target_sub_win.windowTitle()}")
             quad_frame.setStyleSheet("QMainWindow { background-color: #2b2b2b; }")
 
             central_widget = QtWidgets.QWidget(quad_frame)
@@ -138,10 +139,11 @@ class TabContextMenuFilter(QtCore.QObject):
             grid_layout.setSpacing(6)
             quad_frame.setCentralWidget(central_widget)
 
-            # Map coordinates layout configuration
+            # Map coordinates layout configuration layout grid parameters
+            # UPDATED: Replaced REAR with LEFT configuration tracking profile mapping
             view_configs = [
                 (0, 0, "TOP"),
-                (0, 1, "REAR"),
+                (0, 1, "LEFT"),
                 (1, 0, "FRONT"),
                 (1, 1, "ISOMETRIC")
             ]
@@ -156,8 +158,9 @@ class TabContextMenuFilter(QtCore.QObject):
                 if main_active_view:
                     if orientation == "TOP":
                         main_active_view.viewTop()
-                    elif orientation == "REAR":
-                        main_active_view.viewRear()
+                    elif orientation == "LEFT":
+                        # UPDATED: Invoking core native viewLeft C++ macro operation mapping function
+                        main_active_view.viewLeft()
                     elif orientation == "FRONT":
                         main_active_view.viewFront()
                     elif orientation == "ISOMETRIC":
@@ -173,7 +176,7 @@ class TabContextMenuFilter(QtCore.QObject):
                 if updated_stack and len(updated_stack) > len(current_stack):
                     cloned_subwin = updated_stack[-1]
 
-                    # FIX: Apply strict Widget and Frameless flags to strip title bars, borders, and disable mouse dragging/resizing
+                    # Convert the window to an embedded fixed layout widget item
                     cloned_subwin.setWindowFlags(QtCore.Qt.Widget | QtCore.Qt.FramelessWindowHint | QtCore.Qt.CustomizeWindowHint)
 
                     # Append the view perspective title directly into the window title parameter description
