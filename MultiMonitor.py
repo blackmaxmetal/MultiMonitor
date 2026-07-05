@@ -58,17 +58,17 @@ class TabContextMenuFilter(QtCore.QObject):
             if native_menu:
                 # Prevent duplicate entries in the menu
                 for action in native_menu.actions():
-                    if action.text() in ["Open Clone View on Second Monitor", "Four View Clone"]:
+                    if action.text() in ["Open 3D View on Second Monitor", "Open Four View on Second Monitor"]:
                         return
 
                 native_menu.addSeparator()
 
                 # Action 1: Standard single clone
-                clone_action = native_menu.addAction("Open Clone View on Second Monitor")
+                clone_action = native_menu.addAction("Open 3D View on Second Monitor")
                 clone_action.triggered.connect(lambda: self.clone_in_new_standalone_window(tab_index))
 
                 # Action 2: New quad view matrix clone
-                quad_action = native_menu.addAction("Four View Clone")
+                quad_action = native_menu.addAction("Open Four View on Second Monitor")
                 quad_action.triggered.connect(lambda: self.clone_in_four_view_window(tab_index))
 
                 # --- MENU REPOSITIONING ENGINE ---
@@ -258,15 +258,15 @@ class MultiMonitorWindow6(QtWidgets.QMainWindow):
         super().__init__(None, QtCore.Qt.Window)
         self.settings = QtCore.QSettings("FreeCAD", "MultiMonitor")
 
-        # UI Styling block for theme isolation
-        self.setStyleSheet("""
-            QMainWindow { background-color: #2b2b2b; color: #ffffff; }
-            QDockWidget { background-color: #3c3f41; color: #ffffff; border: 1px solid #555555; }
-            QDockWidget::title { background-color: #313335; color: #ffffff; padding-top: 4px; }
-            QTextEdit, QTreeView, QTableView, QWidget { background-color: #2b2b2b; color: #ffffff; }
-            QTabBar::tab { background-color: #3c3f41; color: #ffffff; border: 1px solid #555555; padding: 6px; }
-            QTabBar::tab:selected { background-color: #555555; }
-        """)
+        # # UI Styling block for theme isolation
+        # self.setStyleSheet("""
+        #     QMainWindow { background-color: #2b2b2b; color: #ffffff; }
+        #     QDockWidget { background-color: #3c3f41; color: #ffffff; border: 1px solid #555555; }
+        #     QDockWidget::title { background-color: #313335; color: #ffffff; padding-top: 4px; }
+        #     QTextEdit, QTreeView, QTableView, QWidget { background-color: #2b2b2b; color: #ffffff; }
+        #     QTabBar::tab { background-color: #3c3f41; color: #ffffff; border: 1px solid #555555; padding: 6px; }
+        #     QTabBar::tab:selected { background-color: #555555; }
+        # """)
 
         self.central_widget = QtWidgets.QWidget()
         self.setCentralWidget(self.central_widget)
