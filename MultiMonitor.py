@@ -27,7 +27,7 @@ from PySide import QtWidgets, QtCore
 
 # --- SPREADSHEET REVERSIBLE WINDOW LAYER ---
 class DetachedSpreadsheetWindow(QtWidgets.QMainWindow):
-    """Custom top-level window layout dedicated to hosting extracted spreadsheets and cleaning up tabs safely."""
+
     def __init__(self, sheet_widget, mdi_subwin, notice_label, doc_name, filter_instance):
         super(DetachedSpreadsheetWindow, self).__init__(None, QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowMinMaxButtonsHint | QtCore.Qt.WindowCloseButtonHint)
         self.sheet_widget = sheet_widget
@@ -39,32 +39,98 @@ class DetachedSpreadsheetWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(f"Detached Spreadsheet - {mdi_subwin.windowTitle()}")
         self.setStyleSheet("QMainWindow { background-color: #2b2b2b; }")
         self.setCentralWidget(sheet_widget)
-        sheet_widget.show()
+
+        # --- SPREADSHEET TOOLBAR CLONING INJECTION ---
+        # Locate and inject relevant spreadsheet actions into this secondary window layout
+        self._inject_spreadsheet_toolbar()
+
+        if sheet_widget:
+            sheet_widget.show()
+
+        # Preserved native layout execution call
+        self.show()
+
+    def _inject_spreadsheet_toolbar(self):
+        """Locates FreeCAD's native spreadsheet toolbar actions specifically, avoiding other sheets-based workbenches."""
+        try:
+            mw = FreeCADGui.getMainWindow()
+            if not mw:
+                return
+
+            # Create a clean external toolbar container on this secondary QMainWindow instance
+            external_tb = self.addToolBar("Spreadsheet Tools")
+            external_tb.setMovable(False)
+            external_tb.setStyleSheet("QToolBar { background-color: #333333; border: 1px solid #555555; padding: 2px; }")
+
+            # Strict helper function to scan application toolbars without trapping SheetMetal or other plugins
+            def find_and_copy_spreadsheet_toolbar():
+                for tb in mw.findChildren(QtWidgets.QToolBar):
+                    tb_name = tb.objectName().lower()
+                    # STRICT CHECK: Block third-party sheetmetal items while targetting only the native spreadsheet core
+                    if "spreadsheet" in tb_name and "metal" not in tb_name:
+                        for action in tb.actions():
+                            if action.isSeparator():
+                                external_tb.addSeparator()
+                            else:
+                                external_tb.addAction(action)
+                        return True
+                return False
+
+            # First attempt: Verify if the official spreadsheet toolbar is already drawn on screen
+            found_actions = find_and_copy_spreadsheet_toolbar()
+
+            # FALLBACK INITIALIZATION: If unavailable, force FreeCAD to initialize the actual Spreadsheet environment
+            if not found_actions:
+                try:
+                    # Request FreeCAD command framework to forcefully wake and structure the Spreadsheet workbench layout
+                    FreeCADGui.activateWorkbench("SpreadsheetWorkbench")
+                    QtWidgets.QApplication.processEvents()
+                    # Second attempt: check if the targeted toolbar is now initialized and exposed
+                    found_actions = find_and_copy_spreadsheet_toolbar()
+                except Exception:
+                    pass
+
+            # Ultimate secure layout fallback: manually build and inject core formatting actions if toolbar remains hidden
+            if not found_actions:
+                # Array of targeted command tokens registered into FreeCAD's core registry actions system
+                core_cmds = [
+                    "Spreadsheet_AlignLeft", "Spreadsheet_AlignCenter", "Spreadsheet_AlignRight",
+                    "Spreadsheet_StyleBold", "Spreadsheet_StyleItalic", "Spreadsheet_StyleUnderline"
+                ]
+                for cmd_name in core_cmds:
+                    cmd = FreeCADGui.getCommand(cmd_name)
+                    if cmd:
+                        # Scan all available actions within the application to link the command trigger pointer
+                        for tb in mw.findChildren(QtWidgets.QToolBar):
+                            for act in tb.actions():
+                                if cmd_name in act.objectName() or (act.text() and cmd_name in act.text()):
+                                    external_tb.addAction(act)
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"MultiMonitor Toolbar Notice (Spreadsheet toolbar bypass): {str(e)}\n")
 
     def closeEvent(self, event):
-        """Intercepts closure to cleanly destroy the courtesy notice and shut down the native MDI window shell."""
+        """Intercepts window closure to safely return the spreadsheet widget to FreeCAD native layout before frame destruction."""
         try:
             # 1. Clean up centralized global menu inhibition tracking array
             if hasattr(self, "target_doc_name") and self.target_doc_name:
-                if hasattr(FreeCADGui, '_mm_disabled_sheets') and self.target_doc_name in FreeCADGui._mm_disabled_sheets:
+                if hasattr(FreeCADGui, '_mm_disabled_sheets') and FreeCADGui._mm_disabled_sheets:
                     FreeCADGui._mm_disabled_sheets.remove(self.target_doc_name)
 
-            # 2. Safely evacuate and isolate the spreadsheet grid widget before destroying this frame
-            if self.sheet_widget:
-                self.setCentralWidget(None)
-                self.sheet_widget.setParent(None)
-
-            if self.notice_label:
-                self.notice_label.setParent(None)
-                self.notice_label.deleteLater()
-
-            # 3. CLEAN NATIVE MDI CLOSURE
-            # We explicitly trigger the standard C++ close handler on the native MDI sub-window framework.
-            # This forces FreeCAD to execute a natural window tab deletion, which prevents the application
-            # from forcing any automatic tiling or rimpicciolimento on surrounding 3D windows.
-            if self.mdi_subwin:
+            # 2. SAFE WIDGET GRAFTING ROLLBACK
+            # We evacuate the spreadsheet widget from our external window and restore it back into FreeCAD's native MDI tab
+            if self.sheet_widget and self.mdi_subwin:
                 try:
-                    self.mdi_subwin.setWidget(None)
+                    self.setCentralWidget(None)
+                    self.sheet_widget.setParent(self.mdi_subwin)
+                    self.mdi_subwin.setWidget(self.sheet_widget)
+
+                    # Prevent execution loops by disconnecting the destruction listener temporarily
+                    try:
+                        self.mdi_subwin.destroyed.disconnect()
+                    except Exception:
+                        pass
+
+                    # Safely close only the respective native spreadsheet MDI tab inside FreeCAD
                     self.mdi_subwin.close()
                 except Exception:
                     pass
@@ -73,6 +139,7 @@ class DetachedSpreadsheetWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+        # 3. Unregister reference pointer from global tracking array memory structures
         if hasattr(FreeCADGui, '_mm_standalone_clones') and FreeCADGui._mm_standalone_clones:
             try:
                 if self in FreeCADGui._mm_standalone_clones:
@@ -81,11 +148,8 @@ class DetachedSpreadsheetWindow(QtWidgets.QMainWindow):
                 pass
         event.accept()
 
-
-
-
 class TabContextMenuFilter(QtCore.QObject):
-    """Event filter using PySide to handle UI tab states, 3D clone extractions, and spreadsheet detachment logic."""
+
     def __init__(self, tab_bar, main_addon_window_class):
         super(TabContextMenuFilter, self).__init__(tab_bar)
         self.tab_bar = tab_bar
@@ -98,6 +162,15 @@ class TabContextMenuFilter(QtCore.QObject):
         self.mdi_area = mw.findChild(QtWidgets.QMdiArea) if mw else None
         if self.mdi_area:
             self.mdi_area.subWindowActivated.connect(self._handle_mdi_window_change)
+
+        # Force FreeCAD's native TabBar to broadcast right-clicks externally
+        if self.tab_bar:
+            self.tab_bar.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+            self.tab_bar.customContextMenuRequested.connect(self._handle_forced_context_menu)
+        #
+        # # Instantiate and register our document observer into FreeCAD's native GUI notification system
+        # self._doc_observer = MMDocumentObserver(self)
+        # FreeCADGui.addObserver(self._doc_observer)
 
     def _handle_mdi_window_change(self, active_subwin):
         """Monitors MDI state changes and cross-references active views to force-close orphaning clones."""
@@ -119,12 +192,27 @@ class TabContextMenuFilter(QtCore.QObject):
         except Exception:
             pass
 
+    def _handle_forced_context_menu(self, local_pos):
+        """Slots directly into Qt's forced context signal to determine tabs positions and launch actions injection."""
+        if not self.tab_bar:
+            return
+        tab_index = self.tab_bar.tabAt(local_pos)
+        if tab_index != -1:
+            self._last_tab_rect = self.tab_bar.tabRect(tab_index)
+
+            # Shift FreeCAD's active workspace target to the tab under the user's cursor pointer
+            self.tab_bar.setCurrentIndex(tab_index)
+
+            # Force FreeCAD to synchronize its active view pointer instantly
+            target_sub_win = self.mdi_area.subWindowList()[tab_index]
+            if target_sub_win:
+                self.mdi_area.setActiveSubWindow(target_sub_win)
+
+            QtWidgets.QApplication.processEvents()
+            self.inject_clone_action(tab_index)
+
     def eventFilter(self, obj, event):
-        if obj == self.tab_bar and event.type() == QtCore.QEvent.ContextMenu:
-            local_pos = self.tab_bar.mapFromGlobal(event.globalPos())
-            tab_index = self.tab_bar.tabAt(local_pos)
-            if tab_index != -1:
-                QtCore.QTimer.singleShot(10, lambda: self.inject_clone_action(tab_index))
+        # Fallback safety layer to let FreeCAD handle standard tabs dragging behaviors naturally
         return super(TabContextMenuFilter, self).eventFilter(obj, event)
 
     def _force_close_clones_by_name(self, doc_name):
@@ -133,110 +221,184 @@ class TabContextMenuFilter(QtCore.QObject):
             return
         if hasattr(FreeCADGui, '_mm_standalone_clones') and FreeCADGui._mm_standalone_clones:
             to_remove = []
+            # Normalize target token name string to avoid missmatches due to case casing differences
+            target_token = str(doc_name).strip().lower()
+
             for win in list(FreeCADGui._mm_standalone_clones):
                 try:
-                    if win and hasattr(win, "windowTitle"):
+                    if win:
+                        # Extract cached target tags identifiers properties strings safely
                         win_doc_name = getattr(win, "target_doc_name", None)
-                        title = win.windowTitle()
-                        if win_doc_name == doc_name or f"- {doc_name}" in title or doc_name in title:
+                        win_title = win.windowTitle().lower() if hasattr(win, "windowTitle") else ""
+
+                        # Aggressive cross-referencing matching conditions block to trap all orphaned canvases
+                        is_match = False
+                        if win_doc_name and str(win_doc_name).strip().lower() == target_token:
+                            is_match = True
+                        elif target_token in win_title or target_token.replace("_", " ") in win_title:
+                            is_match = True
+
+                        if is_match:
+                            # Break memory dependencies links to avoid triggering nested Qt delete exceptions loops
+                            if hasattr(win, "setCentralWidget"):
+                                win.setCentralWidget(None)
                             win.setParent(None)
                             win.close()
                             win.deleteLater()
                             to_remove.append(win)
                 except Exception:
                     pass
+
+            # Clean up global standalone listing array memory references pointers safely
             for win in to_remove:
                 if win in FreeCADGui._mm_standalone_clones:
                     FreeCADGui._mm_standalone_clones.remove(win)
 
     def inject_clone_action(self, tab_index):
-        """Dynamically evaluates the underlying widget type of the tab and injects only relevant contextual actions."""
+        """Generates a clean contextual menu containing native FreeCAD actions, Spreadsheets, and TechDraw support."""
         if not self.mdi_area or tab_index >= len(self.mdi_area.subWindowList()):
             return
 
         QtWidgets.QApplication.processEvents()
-        active_widget = QtWidgets.QApplication.activePopupWidget() or QtWidgets.QApplication.activeModalWidget()
-        if not active_widget:
-            active_widget = QtWidgets.QApplication.activeWindow()
 
-        if active_widget:
-            native_menu = active_widget.findChild(QtWidgets.QMenu) or (active_widget if isinstance(active_widget, QtWidgets.QMenu) else None)
-            if native_menu:
-                for action in native_menu.actions():
-                    if action.text() in ["Open 3D View on Second Monitor", "Open Four View on Second Monitor", "Open Spreadsheet on Second Monitor"]:
-                        return
-                native_menu.addSeparator()
+        native_menu = QtWidgets.QMenu(self.tab_bar)
+        native_menu.setAttribute(QtCore.Qt.WA_DeleteOnClose)
 
-                target_sub_win = self.mdi_area.subWindowList()[tab_index]
-                widget_item = target_sub_win.widget()
-                if not widget_item:
-                    return
+        target_sub_win = self.mdi_area.subWindowList()[tab_index]
+        widget_item = target_sub_win.widget()
+        if not widget_item:
+            return
 
-                class_name = widget_item.metaObject().className().lower()
-                is_spreadsheet = "spreadsheet" in class_name or widget_item.findChild(QtWidgets.QTableView) is not None
-                is_3d_view = "view3dinventor" in class_name
+        # --- RESTORE NATIVE FREECAD ACTIONS ---
+        close_action = native_menu.addAction("Close")
+        close_action.setShortcut("Ctrl+F4")
+        close_action.triggered.connect(lambda: target_sub_win.close())
 
-                if is_3d_view:
-                    clone_action = native_menu.addAction("Open 3D View on Second Monitor")
-                    clone_action.triggered.connect(lambda: self.clone_in_new_standalone_window(tab_index))
+        close_all_action = native_menu.addAction("Close All")
+        close_all_action.triggered.connect(lambda: self.mdi_area.closeAllSubWindows())
 
-                    quad_action = native_menu.addAction("Open Four View on Second Monitor")
-                    quad_action.triggered.connect(lambda: self.clone_in_four_view_window(tab_index))
+        native_menu.addSeparator()
 
-                elif is_spreadsheet:
-                    sheet_action = native_menu.addAction("Open Spreadsheet on Second Monitor")
-                    sheet_action.triggered.connect(lambda: self.detach_spreadsheet_window(tab_index))
+        # --- ADVANCED TYPING CASCADE SCAN ---
+        class_name = widget_item.metaObject().className().lower()
 
-                    # GLOBAL ALIGNMENT CHECK: Look into centralized global listing to block item
-                    if hasattr(FreeCADGui, '_mm_disabled_sheets') and FreeCADGui._mm_disabled_sheets:
-                        gui_doc = FreeCADGui.activeDocument()
-                        if gui_doc and gui_doc.Document.Name in FreeCADGui._mm_disabled_sheets:
-                            sheet_action.setEnabled(False)
+        is_3d_view = "view3dinventor" in class_name
+        is_spreadsheet = "spreadsheet" in class_name or widget_item.findChild(QtWidgets.QTableView) is not None
+        is_techdraw = "techdraw" in class_name or "qgraphicsview" in class_name
 
-                menu_geo = native_menu.geometry()
-                screen_height = QtWidgets.QApplication.primaryScreen().geometry().height() if hasattr(QtWidgets.QApplication, 'primaryScreen') else 1080
-                if menu_geo.y() + menu_geo.height() > (screen_height - 100) or menu_geo.y() > (screen_height - 250):
-                    new_y = menu_geo.y() - menu_geo.height() - 40
-                    native_menu.move(menu_geo.x(), max(10, new_y))
+        if is_3d_view:
+            clone_action = native_menu.addAction("Open 3D View on Second Monitor")
+            clone_action.triggered.connect(lambda: self.clone_in_new_standalone_window(tab_index))
+
+            quad_action = native_menu.addAction("Open Four View on Second Monitor")
+            quad_action.triggered.connect(lambda: self.clone_in_four_view_window(tab_index))
+
+        elif is_spreadsheet:
+            sheet_action = native_menu.addAction("Open Spreadsheet on Second Monitor")
+            sheet_action.triggered.connect(lambda: self.detach_spreadsheet_window(tab_index))
+
+            if hasattr(FreeCADGui, '_mm_disabled_sheets') and FreeCADGui._mm_disabled_sheets:
+                gui_doc = FreeCADGui.activeDocument()
+                if gui_doc and gui_doc.Document.Name in FreeCADGui._mm_disabled_sheets:
+                    sheet_action.setEnabled(False)
+
+        elif is_techdraw:
+            td_action = native_menu.addAction("Open TechDraw Page on Second Monitor")
+            td_action.triggered.connect(lambda: self.detach_techdraw_window(tab_index))
+
+        else:
+            neutral_action = native_menu.addAction(f"Active Tab View: {target_sub_win.windowTitle()}")
+            neutral_action.setEnabled(False)
+
+        # --- GEOMETRIC POSITIONING OVERRIDE ---
+        tab_rect = getattr(self, '_last_tab_rect', QtCore.QRect(0, 0, 100, 25))
+        global_tab_top_left = self.tab_bar.mapToGlobal(tab_rect.topLeft())
+        menu_height = native_menu.sizeHint().height()
+
+        final_x = global_tab_top_left.x()
+        final_y = global_tab_top_left.y() - menu_height - 2
+
+        native_menu.exec_(QtCore.QPoint(final_x, max(10, final_y)))
+
+    def _force_purge_tab_by_subwindow(self, mdi_subwin):
+        """Neutral fallback wrapper targeting legacy windows tab evictions routines safely."""
+        if mdi_subwin:
+            try:
+                mdi_subwin.close()
+            except Exception:
+                pass
 
     def clone_in_new_standalone_window(self, tab_index):
-        """Creates a twin 3D View and detaches it into a completely standalone top-level window using PySide."""
-        mw = FreeCADGui.getMainWindow()
+        """Creates a twin 3D View inside FreeCAD first, then schedules its extraction safely."""
         if not self.mdi_area or tab_index >= len(self.mdi_area.subWindowList()):
             return
         target_sub_win = self.mdi_area.subWindowList()[tab_index]
         target_sub_win.setFocus()
+
         gui_doc = FreeCADGui.activeDocument()
         if not gui_doc:
             return
         try:
-            sub_windows = self.mdi_area.subWindowList()
-            QtCore.QTimer.singleShot(0, lambda: self._execute_view_extraction(self.mdi_area, sub_windows, target_sub_win, gui_doc, mw))
+            # 1. Take a snapshot of the sub-windows list before creating the new view
+            sub_windows_before = self.mdi_area.subWindowList()
+
+            # 2. Tell FreeCAD to create the 3D View inside its native environment naturally
+            gui_doc.createView("Gui::View3DInventor")
+            QtWidgets.QApplication.processEvents()
+
+            # 3. Schedule the detachment routine AFTER FreeCAD has finished initializing the view
+            # This tiny delay prevents the C++ engine from crashing during the extraction step
+            QtCore.QTimer.singleShot(50, lambda: self._execute_view_extraction(target_sub_win, gui_doc, sub_windows_before))
         except Exception as e:
             FreeCAD.Console.PrintError(f"MultiMonitor Error (Failed single clone trigger): {str(e)}\n")
 
-    def _execute_view_extraction(self, mdi_area, sub_windows, target_sub_win, gui_doc, mw):
-        """Internal sub-routine to build and display the single isolated clone viewport."""
+    def _execute_view_extraction(self, target_sub_win, gui_doc, sub_windows_before):
+        """Safely extracts the single 3D view and binds its closing lifecycle directly to the native MDI sub-window."""
         try:
-            gui_doc.createView("Gui::View3DInventor")
-            fresh_sub_windows = mdi_area.subWindowList()
-            if fresh_sub_windows and len(fresh_sub_windows) > len(sub_windows):
-                new_view_subwin = fresh_sub_windows[-1]
-                new_view_subwin.setParent(None)
-                new_view_subwin.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowMinMaxButtonsHint | QtCore.Qt.WindowCloseButtonHint)
-                new_view_subwin.setWindowTitle(f"3D Clone View - {target_sub_win.windowTitle()}")
-                new_view_subwin.setStyleSheet("QWidget { background-color: #2b2b2b; }")
+            mw = FreeCADGui.getMainWindow()
+            fresh_sub_windows = self.mdi_area.subWindowList()
 
-                # Explicitly tag the window with the document's C++ internal name for strict tracking
-                new_view_subwin.target_doc_name = gui_doc.Document.Name
+            if fresh_sub_windows and len(fresh_sub_windows) > len(sub_windows_before):
+                new_view_subwin = fresh_sub_windows[-1]
+
+                single_frame = QtWidgets.QMainWindow(None, QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowMinMaxButtonsHint | QtCore.Qt.WindowCloseButtonHint)
+                single_frame.setWindowTitle(f"3D Clone View - {target_sub_win.windowTitle()}")
+                single_frame.setStyleSheet("QMainWindow { background-color: #2b2b2b; }")
+
+                view_widget = new_view_subwin.widget()
+                if view_widget:
+                    new_view_subwin.setWidget(None)
+                    single_frame.setCentralWidget(view_widget)
+                    view_widget.show()
+
+                new_view_subwin.close()
+
+                # Cache document name string safely before any destruction sequence alters the pointers
+                doc_name = gui_doc.Document.Name
+
+                # --- ADVANCED LIFECYCLE LINK ---
+                # When the native window tab is closed, shut down the clone and force FreeCAD C++ core to unload the document
+                def perform_complete_cleanup():
+                    try:
+                        single_frame.close()
+                        if doc_name in FreeCAD.listDocuments():
+                            FreeCAD.closeDocument(doc_name)
+                    except Exception:
+                        pass
+
+                target_sub_win.destroyed.connect(perform_complete_cleanup)
 
                 if not hasattr(FreeCADGui, '_mm_standalone_clones'):
                     FreeCADGui._mm_standalone_clones = []
-                FreeCADGui._mm_standalone_clones.append(new_view_subwin)
-                new_view_subwin.showNormal()
-                self._apply_monitor_and_geometry(new_view_subwin, mw, 850, 600)
-                new_view_subwin.raise_()
-                new_view_subwin.activateWindow()
+                FreeCADGui._mm_standalone_clones.append(single_frame)
+
+                single_frame.showNormal()
+                self._apply_monitor_and_geometry(single_frame, mw, 850, 600)
+                single_frame.raise_()
+                single_frame.activateWindow()
+
+                if target_sub_win:
+                    self.mdi_area.setActiveSubWindow(target_sub_win)
         except Exception as e:
             FreeCAD.Console.PrintError(f"MultiMonitor Error (Failed single clone extraction): {str(e)}\n")
 
@@ -256,14 +418,26 @@ class TabContextMenuFilter(QtCore.QObject):
             FreeCAD.Console.PrintError(f"MultiMonitor Error (Failed quad clone trigger): {str(e)}\n")
 
     def _execute_four_view_extraction(self, mdi_area, target_sub_win, gui_doc, mw):
-        """Assembles the 2x2 grid layout, generates 4 independent views, and overrides their camera angles."""
+        """Assembles the 2x2 grid layout and binds its closing lifecycle directly to the native active MDI sub-window."""
         try:
             quad_frame = QtWidgets.QMainWindow(None, QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowMinMaxButtonsHint | QtCore.Qt.WindowCloseButtonHint)
             quad_frame.setWindowTitle(f"Four View Matrix Clone (TOP, FRONT, LEFT, ISOMETRIC) - {target_sub_win.windowTitle()}")
             quad_frame.setStyleSheet("QMainWindow { background-color: #2b2b2b; }")
 
-            # Explicitly tag the quad container with the document's C++ internal name for strict tracking
-            quad_frame.target_doc_name = gui_doc.Document.Name
+            # Cache document name string safely before any destruction sequence alters the pointers
+            doc_name = gui_doc.Document.Name
+
+            # --- ADVANCED LIFECYCLE LINK ---
+            # When the native window tab is closed, shut down the quad frame and force FreeCAD C++ core to unload the document
+            def perform_quad_cleanup():
+                try:
+                    quad_frame.close()
+                    if doc_name in FreeCAD.listDocuments():
+                        FreeCAD.closeDocument(doc_name)
+                except Exception:
+                    pass
+
+            target_sub_win.destroyed.connect(perform_quad_cleanup)
 
             central_widget = QtWidgets.QWidget(quad_frame)
             grid_layout = QtWidgets.QGridLayout(central_widget)
@@ -311,7 +485,7 @@ class TabContextMenuFilter(QtCore.QObject):
             FreeCAD.Console.PrintError(f"MultiMonitor Error (Failed quad clone assembly): {str(e)}\n")
 
     def detach_spreadsheet_window(self, tab_index):
-        """Extracts the native spreadsheet widget safely and mounts a courtesy splash card inside the MDI shell container."""
+        """Extracts the native spreadsheet widget, injects a text notice mask, and handles clean workspace updates."""
         if not self.mdi_area or tab_index >= len(self.mdi_area.subWindowList()):
             return
 
@@ -323,62 +497,170 @@ class TabContextMenuFilter(QtCore.QObject):
             return
 
         try:
+            # Fetch the main widget profile mapped into FreeCAD's active sub-window interface layout
             sheet_widget = target_sub_win.widget()
             if not sheet_widget:
                 return
 
-            # Verify that the chosen tab contains a valid spreadsheet view profile architecture
-            class_name = sheet_widget.metaObject().className().lower()
-            has_table = "spreadsheet" in class_name or sheet_widget.findChild(QtWidgets.QTableView) is not None
-            if not has_table:
-                FreeCAD.Console.PrintWarning("MultiMonitor: Selected tab is not an active Spreadsheet canvas.\n")
-                return
-
             doc_name = gui_doc.Document.Name
-            original_title = target_sub_win.windowTitle()
 
-            # Initialize centralized tracking array inside FreeCADGui global memory if not present
-            if not hasattr(FreeCADGui, '_mm_disabled_sheets'):
-                FreeCADGui._mm_disabled_sheets = []
-
-            # Append the document token name inside our central global block list to handle item inhibition
-            if doc_name not in FreeCADGui._mm_disabled_sheets:
-                FreeCADGui._mm_disabled_sheets.append(doc_name)
-
-            # MDI VISUAL ANCHOR GUARD: Inject a clean courtesy splash layout card inside the vacant MDI shell container.
-            # This masks the extraction so FreeCAD's layout engine believes the window structure is active, preserving tiled sizes.
-            notice_card = QtWidgets.QWidget()
-            notice_card.setStyleSheet("background-color: #2b2b2b;")
-            card_layout = QtWidgets.QVBoxLayout(notice_card)
-
-            lbl_notice = QtWidgets.QLabel("🖥️ Spreadsheet detached on secondary monitor\n\nClosing the external window will destroy this tab.", notice_card)
-            lbl_notice.setAlignment(QtCore.Qt.AlignCenter)
-            lbl_notice.setStyleSheet("color: #888888; font-size: 13px; font-weight: bold;")
-            card_layout.addWidget(lbl_notice)
-
-            # Instantiate our specialized separate window container passing pointers to clean them up
-            sheet_frame = DetachedSpreadsheetWindow(sheet_widget, target_sub_win, notice_card, doc_name, self)
+            # --- SAFE EXTRACTION WITH ENVELOPE RESTORATION ---
+            # Instantiate our specialized separate window container passing the original spreadsheet widget
+            sheet_frame = DetachedSpreadsheetWindow(sheet_widget, target_sub_win, None, doc_name, self)
             sheet_frame.target_doc_name = doc_name
 
-            # Mount the notice layout card directly into the native active MDI frame shell to freeze titles and positions
-            target_sub_win.setWidget(notice_card)
+            # Create an elegant temporary layout placeholder to populate FreeCAD's native workspace tab area
+            placeholder_card = QtWidgets.QWidget()
+            placeholder_card.setStyleSheet("background-color: #2b2b2b;")
+            card_layout = QtWidgets.QVBoxLayout(placeholder_card)
+
+            # Injected upscaled monitor icon with HTML span tags safely
+            lbl_notice = QtWidgets.QLabel("<span style='font-size: 36px;'>🖥️</span><br><br>The spreadsheet has been moved to an external window.", placeholder_card)
+            lbl_notice.setAlignment(QtCore.Qt.AlignCenter)
+            lbl_notice.setStyleSheet("color: #aaaaaa; font-size: 13px; font-weight: bold; line-height: 150%;")
+            card_layout.addWidget(lbl_notice)
+
+            # Assign the temporary text card placeholder into FreeCAD's open MDI sub-window framework
+            target_sub_win.setWidget(placeholder_card)
+
+            # Assign the notice label pointer onto the frame object tracking memory structures for clean deletions
+            sheet_frame.notice_label = placeholder_card
+
+            # Disconnect any old conflicting listeners to avoid race conditions loops
+            try:
+                target_sub_win.destroyed.disconnect()
+            except Exception:
+                pass
+
+            # --- SAFE DOCUMENT CLOSURE ROLLBACK HOOK ---
+            # If the user closes the main document directly, we return the widget home right before deletion
+            def restore_on_document_delete():
+                try:
+                    sheet_frame.setCentralWidget(None)
+                    if target_sub_win and sheet_widget:
+                        target_sub_win.setWidget(sheet_widget)
+                    sheet_frame.close()
+                except Exception:
+                    pass
+
+            target_sub_win.destroyed.connect(restore_on_document_delete)
 
             if not hasattr(FreeCADGui, '_mm_standalone_clones'):
                 FreeCADGui._mm_standalone_clones = []
             FreeCADGui._mm_standalone_clones.append(sheet_frame)
 
-            # Render frame container on secondary screen layout geometry borders safely
-            sheet_frame.showNormal()
+            # Geometry positioning routine targeting secondary screen borders layout safely
             self._apply_monitor_and_geometry(sheet_frame, FreeCADGui.getMainWindow(), 1000, 700)
             sheet_frame.raise_()
             sheet_frame.activateWindow()
 
             FreeCAD.Console.PrintLog("MultiMonitor: Spreadsheet safely isolated and detached onto secondary monitor.\n")
-
         except Exception as e:
             FreeCAD.Console.PrintError(f"MultiMonitor Error (Failed spreadsheet window extraction): {str(e)}\n")
 
+    def detach_techdraw_window(self, tab_index):
+        """Extracts the native TechDraw vector drawing view panel and detaches it into a top-level window frame safely."""
+        if not self.mdi_area or tab_index >= len(self.mdi_area.subWindowList()):
+            return
 
+        target_sub_win = self.mdi_area.subWindowList()[tab_index]
+        target_sub_win.setFocus()
+
+        gui_doc = FreeCADGui.activeDocument()
+        if not gui_doc:
+            return
+
+        try:
+            # Fetch the main TechDraw graphics scene viewer widget profile
+            techdraw_widget = target_sub_win.widget()
+            if not techdraw_widget:
+                return
+
+            doc_name = gui_doc.Document.Name
+
+            # --- SECURE CONTAINER MOUNTING ---
+            # Build a dedicated frame manager window to host the vector graphics sheet layout
+            td_frame = QtWidgets.QMainWindow(None, QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowMinMaxButtonsHint | QtCore.Qt.WindowCloseButtonHint)
+            td_frame.setWindowTitle(f"TechDraw Page View - {target_sub_win.windowTitle()}")
+            td_frame.setStyleSheet("QMainWindow { background-color: #2b2b2b; }")
+
+            # Embed the original vector scene widget directly as the central workspace of the external window
+            td_frame.setCentralWidget(techdraw_widget)
+            techdraw_widget.show()
+
+            # --- ELEGANT VISUAL PLACEHOLDER MASK ---
+            # Inject a lightweight container card inside FreeCAD's native MDI to satisfy the layout engine and Ribbon UI
+            placeholder_card = QtWidgets.QWidget()
+            placeholder_card.setStyleSheet("background-color: #2b2b2b;")
+            card_layout = QtWidgets.QVBoxLayout(placeholder_card)
+
+            # Upscaled the monitor icon using HTML tags wrapper inside TechDraw courtesy card
+            lbl_notice = QtWidgets.QLabel("<span style='font-size: 36px;'>🖥️</span><br><br>The TechDraw drawing page has been moved to an external window.", placeholder_card)
+            lbl_notice.setAlignment(QtCore.Qt.AlignCenter)
+            lbl_notice.setStyleSheet("color: #aaaaaa; font-size: 13px; font-weight: bold;")
+
+            # lbl_notice = QtWidgets.QLabel("🖥️ The TechDraw drawing page has been moved to an external window.", placeholder_card)
+            # lbl_notice.setAlignment(QtCore.Qt.AlignCenter)
+            # lbl_notice.setStyleSheet("color: #aaaaaa; font-size: 13px; font-weight: bold;")
+            card_layout.addWidget(lbl_notice)
+
+            # Assign the temporary text card placeholder into FreeCAD's open MDI sub-window framework
+            target_sub_win.setWidget(placeholder_card)
+
+            # Disconnect any old conflicting listeners to avoid race conditions loops
+            try:
+                target_sub_win.destroyed.disconnect()
+            except Exception:
+                pass
+
+            # --- INTEGRATED LIFECYCLE CONNECTIONS ---
+            # Hook 1: If the user closes the main document or the native tab, close the external TechDraw window automatically
+            def handle_techdraw_deletion():
+                try:
+                    td_frame.close()
+                except Exception:
+                    pass
+            target_sub_win.destroyed.connect(handle_techdraw_deletion)
+
+            # Hook 2: Overriding the close behavior of the external window to ensure it triggers the tab closure too
+            def handle_external_close(event):
+                try:
+                    # Return window control and sever widget links to prevent cyclic deletion crashes in Qt
+                    td_frame.setCentralWidget(None)
+                    if target_sub_win:
+                        try:
+                            target_sub_win.destroyed.disconnect()
+                        except Exception:
+                            pass
+                        # Return the original widget to FreeCAD right before closing to satisfy the C++ destructor
+                        target_sub_win.setWidget(techdraw_widget)
+                        # Let FreeCAD natively close and clear the drawing tab completely from the workspace
+                        target_sub_win.close()
+                except Exception:
+                    pass
+
+                # Unregister from global tracking array memory structures
+                if hasattr(FreeCADGui, '_mm_standalone_clones') and FreeCADGui._mm_standalone_clones:
+                    if td_frame in FreeCADGui._mm_standalone_clones:
+                        FreeCADGui._mm_standalone_clones.remove(td_frame)
+                event.accept()
+
+            # Override the closeEvent method of our fresh window instance dynamically via lambda assignment
+            td_frame.closeEvent = handle_external_close
+
+            if not hasattr(FreeCADGui, '_mm_standalone_clones'):
+                FreeCADGui._mm_standalone_clones = []
+            FreeCADGui._mm_standalone_clones.append(td_frame)
+
+            # Render the standalone frame window onto the secondary screen geometry coordinates safely
+            td_frame.showNormal()
+            self._apply_monitor_and_geometry(td_frame, FreeCADGui.getMainWindow(), 1100, 800)
+            td_frame.raise_()
+            td_frame.activateWindow()
+
+            FreeCAD.Console.PrintLog("MultiMonitor: TechDraw page view successfully projected onto secondary monitor.\n")
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"MultiMonitor Error (Failed TechDraw page extraction): {str(e)}\n")
 
     def _apply_monitor_and_geometry(self, window_instance, fallback_mw, default_w, default_h):
         """Unified geometric calculations module targeting multi-monitor window positioning using PySide."""
@@ -580,11 +862,13 @@ class MultiMonitorAddon:
             tab_bar = mdi_area.findChild(QtWidgets.QTabBar)
             if not tab_bar:
                 return
-
             # If a new tab bar workspace is generated or replaced, switch filters safely
             if tab_bar != self.active_tabbar:
                 if self.active_tabbar and self.filter_instance:
                     try:
+                        # >>> ADD This block to remove the old observer cleanly <<<
+                        if hasattr(self.filter_instance, '_doc_observer') and self.filter_instance._doc_observer:
+                            FreeCADGui.removeObserver(self.filter_instance._doc_observer)
                         self.active_tabbar.removeEventFilter(self.filter_instance)
                     except Exception:
                         pass
