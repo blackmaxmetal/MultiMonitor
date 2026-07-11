@@ -280,6 +280,22 @@ class TabContextMenuFilter(QtCore.QObject):
             self.inject_clone_action(tab_index)
 
     def eventFilter(self, obj, event):
+        """
+        Monitors TabBar layout and paint events to dynamically detect and hide
+        any 'Untitled' structural placeholder tabs without affecting other functions.
+        """
+        try:
+            # Catch when FreeCAD redraws or updates the layout structure of the tab row
+            if self.tab_bar and event.type() in [QtCore.QEvent.Paint, QtCore.QEvent.LayoutRequest]:
+                # Loop through all available tabs to verify their current text labels
+                for idx in range(self.tab_bar.count()):
+                    tab_text = str(self.tab_bar.tabText(idx)).strip().lower()
+                    # If the tab has changed to Untitled or is empty, force it to be hidden
+                    if "untitled" in tab_text or tab_text == "":
+                        self.tab_bar.setTabVisible(idx, False)
+        except Exception:
+            pass
+
         # Fallback safety layer to let FreeCAD handle standard tabs dragging behaviors naturally
         return super(TabContextMenuFilter, self).eventFilter(obj, event)
 
@@ -552,6 +568,38 @@ class TabContextMenuFilter(QtCore.QObject):
         except Exception as e:
             FreeCAD.Console.PrintError(f"MultiMonitor Error (Failed quad clone assembly): {str(e)}\n")
 
+    def _clean_ghost_tabs(self):
+        """
+        Scans and hides 'Untitled' placeholder tabs ONLY if a TechDraw window
+        is currently detached, leaving the spreadsheet tab focus completely untouched.
+        """
+        if not self.tab_bar:
+            return
+        try:
+            # Strictly verify if a TechDraw page is active in the detached clones array
+            has_detached_techdraw = False
+            if hasattr(FreeCADGui, '_mm_standalone_clones') and FreeCADGui._mm_standalone_clones:
+                for win in FreeCADGui._mm_standalone_clones:
+                    if win and "techdraw" in win.windowTitle().lower():
+                        has_detached_techdraw = True
+                        break
+
+            # GUARD CLAUSE: If no detached TechDraw is found, abort immediately to protect Spreadsheet focus
+            if not has_detached_techdraw:
+                return
+
+            QtWidgets.QApplication.processEvents()
+            # Loop exclusively to hide the TechDraw ghost placeholder tab
+            for idx in range(self.tab_bar.count()):
+                tab_text = str(self.tab_bar.tabText(idx)).strip().lower()
+                if "untitled" in tab_text or tab_text == "":
+                    self.tab_bar.setTabVisible(idx, False)
+            self.tab_bar.update()
+        except Exception:
+            pass
+
+
+
     def detach_spreadsheet_window(self, tab_index):
         """Extracts the native spreadsheet widget, injects a text notice mask, and handles clean workspace updates."""
         if not self.mdi_area or tab_index >= len(self.mdi_area.subWindowList()):
@@ -632,42 +680,37 @@ class TabContextMenuFilter(QtCore.QObject):
                 if hasattr(FreeCADGui, '_mm_standalone_clones') and FreeCADGui._mm_standalone_clones:
                     if sheet_frame in FreeCADGui._mm_standalone_clones:
                         FreeCADGui._mm_standalone_clones.remove(sheet_frame)
+                if self.tab_bar:
+                    self.tab_bar.setMaximumHeight(16777215)
+                QtCore.QTimer.singleShot(50, self._clean_ghost_tabs)
+                QtCore.QTimer.singleShot(100, self._clean_ghost_tabs)
                 event.accept()
 
             # Assign the custom close event back to the window instance dynamically
             sheet_frame.closeEvent = handle_sheet_frame_close
+
             # --- FORCE MONITOR GEOMETRY AND CENTERING CORRECTION ---
             # Universally locate system monitors layout using the screen array to center the window frame
             mw = FreeCADGui.getMainWindow()
             if mw:
                 screens = QtWidgets.QApplication.screens()
                 current_screen_idx = 0
-
-                # Identify which screen currently hosts FreeCAD's main window geometry bounds
                 for i, scr in enumerate(screens):
                     if scr.geometry().contains(mw.geometry().center()):
                         current_screen_idx = i
                         break
-
-                # Target the secondary screen index, looping back if only a single display is active
                 target_screen_idx = current_screen_idx + 1
                 if target_screen_idx >= len(screens):
                     target_screen_idx = 0
-
                 target_screen = screens[target_screen_idx]
                 screen_geo = target_screen.availableGeometry()
-
-                # Precise geometric centering calculation: (Screen Size - Window Size) / 2
                 target_w, target_h = 1000, 700
                 center_x = screen_geo.x() + (screen_geo.width() - target_w) // 2
                 center_y = screen_geo.y() + (screen_geo.height() - target_h) // 2
-
-                # Apply the perfectly centered geometry bounds onto the detached sheet frame layout
                 sheet_frame.setGeometry(center_x, center_y, target_w, target_h)
 
             sheet_frame.raise_()
             sheet_frame.activateWindow()
-
 
             FreeCAD.Console.PrintLog("MultiMonitor: Spreadsheet safely isolated and detached onto secondary monitor.\n")
         except Exception as e:
@@ -756,6 +799,7 @@ class TabContextMenuFilter(QtCore.QObject):
                 if hasattr(FreeCADGui, '_mm_standalone_clones') and FreeCADGui._mm_standalone_clones:
                     if td_frame in FreeCADGui._mm_standalone_clones:
                         FreeCADGui._mm_standalone_clones.remove(td_frame)
+                QtCore.QTimer.singleShot(100, self._clean_ghost_tabs)
                 event.accept()
 
             # Override the closeEvent method of our fresh window instance dynamically via lambda assignment
@@ -770,6 +814,9 @@ class TabContextMenuFilter(QtCore.QObject):
             self._apply_monitor_and_geometry(td_frame, FreeCADGui.getMainWindow(), 1100, 800)
             td_frame.raise_()
             td_frame.activateWindow()
+
+            QtCore.QTimer.singleShot(50, self._clean_ghost_tabs)
+            QtCore.QTimer.singleShot(250, self._clean_ghost_tabs)
 
             FreeCAD.Console.PrintLog("MultiMonitor: TechDraw page view successfully projected onto secondary monitor.\n")
         except Exception as e:
